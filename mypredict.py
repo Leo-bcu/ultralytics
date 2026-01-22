@@ -1,6 +1,6 @@
 from ultralytics import YOLO
 
-model = YOLO(r"yolo11n.pt")  # load a pretrained YOLOv8n model
+model = YOLO(r"yolo11n-seg.pt")  # load a pretrained YOLOv8n model
 
 model.predict(source=r"/Users/leo/Desktop/deeplearing/ultralytics/ultralytics/assets",
               show=False,

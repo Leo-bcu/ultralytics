@@ -1,13 +1,13 @@
 from ultralytics import YOLO
 
 if __name__ == "__main__":
-    model = YOLO(r"yolo11n.pt")  # load a pretrained YOLOv8n model
+    model = YOLO("yolo11n.pt")  # load a pretrained YOLOv8n model
 
     # Train the model
-    model.train(data="african-wildlife.yaml", 
+    model.train(data="MUObj.yaml", 
                 epochs=10, 
-                imgsz=640, 
-                batch=2,
-                cache=False,
-                workers=0,
+                imgsz=320, 
+                batch=-1,
+                cache="ram",
+                workers=1,
                )

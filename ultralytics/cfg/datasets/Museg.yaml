@@ -1,0 +1,30 @@
+# Museg dataset configuration file
+# Documentation: https://docs.ultralytics.com/datasets/detect/museg/
+# Example usage: yolo train data=Museg.yaml
+# parent
+# ├── ultralytics
+# └── datasets
+#     └── Museg ← downloads here    
+
+path: Museg # dataset root dir
+train: images/train # train images (relative to 'path') 4 images
+val: images/val # val images (relative to 'path') 4 images
+test: # test images (optional)
+
+# Classes
+names:
+  0: "person"
+  1: "cable"
+  2: "tube"
+  3: "indicator"
+  4: "electrical equipment"
+  5: "electronic equipment"
+  6: "mining equipment"
+  7: "rail area"
+  8: "support equipment"
+  9: "door"
+  10: "tools and materials"
+  11: "rescue equipment"
+  12: "container"
+  13: "metal fixture"
+  14: "anchoring equipment"
