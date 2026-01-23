@@ -16,35 +16,36 @@ scales: # model compound scaling constants, i.e. 'model=yolo11n.yaml' will call 
 
 # YOLO11n backbone
 backbone:
-  # [from, repeats, module, args]
-  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
-  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
-  - [-1, 2, C3k2, [256, False, 0.25]]
-  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
-  - [-1, 2, C3k2, [512, False, 0.25]]
-  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
-  - [-1, 2, C3k2, [512, True]]
-  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
-  - [-1, 2, C3k2, [1024, True]]
-  - [-1, 1, SPPF, [1024, 5]] # 9
-  - [-1, 2, C2PSA, [1024]] # 10
+  # [from, repeats, module, args]                  640x640x3  输入图像
+  - [-1, 1, Conv, [64, 3, 2]]         # 0-P1/2     320x320x64 下采样+扩维
+  - [-1, 1, Conv, [128, 3, 2]]        # 1-P2/4     160x160x128 下采样+扩维
+  - [-1, 2, C3k2, [256, False, 0.25]] # CSPNet     160x160x256 特征提取+P2精修 该步骤属于标准的 Bottleneck（瓶颈层）
+  - [-1, 1, Conv, [256, 3, 2]]        # 3-P3/8     80x80x256   下采样+扩维
+  - [-1, 2, C3k2, [512, False, 0.25]] # CSPNet     80x80x512   特征提取+P3精修 该步骤属于标准的 Bottleneck（瓶颈层）
+  - [-1, 1, Conv, [512, 3, 2]]        # 5-P4/16    40x40x512 下采样+扩维
+  - [-1, 2, C3k2, [512, True]]        # CSPNet     40x40x512 特征提取+P4精修 该步骤属于跨阶段部分连接的CSPNet模块，捕获复杂的语义信息。
+  - [-1, 1, Conv, [1024, 3, 2]]       # 7-P5/32    20x20x1024 下采样+扩维
+  - [-1, 2, C3k2, [1024, True]] # CSPNet模块 20x20x1024 特征提取+P5精修
+  - [-1, 1, SPPF, [1024, 5]] # 9 # 空间金字塔池化层 20x20x1024 增强感受野+多尺度特征融合
+  - [-1, 2, C2PSA, [1024]] # 10 # C2f模块 20x20x1024 特征融合+通道注意力机制+精修
 
 # YOLO11n head
 head:
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [[-1, 6], 1, Concat, [1]] # cat backbone P4
-  - [-1, 2, C3k2, [512, False]] # 13
+  #P5+P4，上采样
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 上采样x2 将P5特征图尺寸变为40x40，通道数不变 40x40x1024
+  - [[-1, 6], 1, Concat, [1]] # cat backbone P4  # 融合P4特征图 40x40x(1024+512) 40x40x1536 
+  - [-1, 2, C3k2, [512, False]] # 13  CSPNet 40x40x512 压缩通道数，得到P4加强特征图
+  #P4+P3，上采样
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 上采样x2 将P4特征图尺寸变为80x80，通道数不变 80x80x512
+  - [[-1, 4], 1, Concat, [1]] # cat backbone P3 # 融合P3特征图 80x80x(512+256) 80x80x768
+  - [-1, 2, C3k2, [256, False]] # 16 (P3/8-small) CSPNet 80x80x256 压缩通道数，得到P3加强特征图 小物体检测分支
+ #P3+P4，下采样
+  - [-1, 1, Conv, [256, 3, 2]]       # 下采样x2 将P3特征图尺寸变为40x40，通道数变为256 40x40x256
+  - [[-1, 13], 1, Concat, [1]] # cat head P4 # 融合P4加强特征图 40x40x(256+512) 40x40x768
+  - [-1, 2, C3k2, [512, False]] # 19 (P4/16-medium) CSPNet 40x40x512 压缩通道数，得到P4加强特征图 中物体检测分支
+ #P4+P5，下采样
+  - [-1, 1, Conv, [512, 3, 2]]      # 下采样x2 将P4特征图尺寸变为20x20，通道数变为512 20x20x512
+  - [[-1, 10], 1, Concat, [1]] # cat head P5 # 融合P5加强特征图 20x20x(512+1024) 20x20x1536
+  - [-1, 2, C3k2, [1024, True]] # 22 (P5/32-large)  CSPNet 20x20x1024 压缩通道数，得到P5加强特征图 大物体检测分支
 
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [[-1, 4], 1, Concat, [1]] # cat backbone P3
-  - [-1, 2, C3k2, [256, False]] # 16 (P3/8-small)
-
-  - [-1, 1, Conv, [256, 3, 2]]
-  - [[-1, 13], 1, Concat, [1]] # cat head P4
-  - [-1, 2, C3k2, [512, False]] # 19 (P4/16-medium)
-
-  - [-1, 1, Conv, [512, 3, 2]]
-  - [[-1, 10], 1, Concat, [1]] # cat head P5
-  - [-1, 2, C3k2, [1024, True]] # 22 (P5/32-large)
-
-  - [[16, 19, 22], 1, Detect, [nc]] # Detect(P3, P4, P5)
+  - [[16, 19, 22], 1, Detect, [nc]] # Detect(P3, P4, P5) # 检测头 输出检测结果
