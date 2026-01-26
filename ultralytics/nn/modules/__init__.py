@@ -188,3 +188,4 @@ __all__ = (
     "YOLOESegment26",
     "v10Detect",
 )
+from .fusion import SplitInput, SelectItem, CGAFusion

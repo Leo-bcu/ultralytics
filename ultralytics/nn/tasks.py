@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from ultralytics.nn.modules.fusion import SplitInput, SelectItem, CGAFusion
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -1511,6 +1512,7 @@ def load_checkpoint(weight, device=None, inplace=True, fuse=False):
 
 
 def parse_model(d, ch, verbose=True):
+    ch = 6 # [Auto-Fix] Force 6 channels for RGB-D training
     """Parse a YOLO model.yaml dictionary into a PyTorch model.
 
     Args:
@@ -1616,7 +1618,25 @@ def parse_model(d, ch, verbose=True):
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in base_modules:
+       # =======================================================
+        # [修正版] 多模态解析逻辑 (Fixed List Index Error)
+        # =======================================================
+        if m is SplitInput:
+            c1 = ch[f]
+            c2 = [c1 // 2, c1 // 2]
+            args = []
+        elif m is SelectItem:
+            # [关键修复] 如果 YAML 写的是 [[0], ...], f 就是 list
+            # 我们需要取出其中的整数索引
+            idx = f[0] if isinstance(f, list) else f
+            c1 = ch[idx]  # 获取上一层(SplitInput)的输出: [3, 3]
+            c2 = c1[args[0]] # 根据 args[0] 选择 RGB(3) 或 Depth(3)
+        elif m is CGAFusion:
+            # CGAFusion 的 from 是 [rgb_layer, depth_layer]
+            c1 = ch[f[0]]
+            c2 = c1
+            args = [c1]
+        elif m in base_modules:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 != nc (e.g., Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
@@ -1690,7 +1710,6 @@ def parse_model(d, ch, verbose=True):
             args = [*args[1:]]
         else:
             c2 = ch[f]
-
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
@@ -1701,7 +1720,7 @@ def parse_model(d, ch, verbose=True):
         layers.append(m_)
         if i == 0:
             ch = []
-        ch.append(c2)
+        ch.append(c2)          
     return torch.nn.Sequential(*layers), sorted(save)
 
 
