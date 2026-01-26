@@ -207,75 +207,166 @@ class BaseDataset(Dataset):
             if self.single_cls:
                 self.labels[i]["cls"][:, 0] = 0
 
-    def load_image(self, i: int, rect_mode: bool = True) -> tuple[np.ndarray, tuple[int, int], tuple[int, int]]:
-        """Load an image from dataset index 'i'.
+    # def load_image(self, i: int, rect_mode: bool = True) -> tuple[np.ndarray, tuple[int, int], tuple[int, int]]:
+    #     """Load an image from dataset index 'i'.
 
-        Args:
-            i (int): Index of the image to load.
-            rect_mode (bool): Whether to use rectangular resizing.
+    #     Args:
+    #         i (int): Index of the image to load.
+    #         rect_mode (bool): Whether to use rectangular resizing.
 
-        Returns:
-            im (np.ndarray): Loaded image as a NumPy array.
-            hw_original (tuple[int, int]): Original image dimensions in (height, width) format.
-            hw_resized (tuple[int, int]): Resized image dimensions in (height, width) format.
+    #     Returns:
+    #         im (np.ndarray): Loaded image as a NumPy array.
+    #         hw_original (tuple[int, int]): Original image dimensions in (height, width) format.
+    #         hw_resized (tuple[int, int]): Resized image dimensions in (height, width) format.
 
-        Raises:
-            FileNotFoundError: If the image file is not found.
-        """
+    #     Raises:
+    #         FileNotFoundError: If the image file is not found.
+    #     """
+    #     im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
+    #     if im is None:  # not cached in RAM
+    #         if fn.exists():  # load npy
+    #             try:
+    #                 im = np.load(fn)
+    #             except Exception as e:
+    #                 LOGGER.warning(f"{self.prefix}Removing corrupt *.npy image file {fn} due to: {e}")
+    #                 Path(fn).unlink(missing_ok=True)
+    #                 im = imread(f, flags=self.cv2_flag)  # BGR
+    #         else:  # read image
+    #             im = imread(f, flags=self.cv2_flag)  # BGR
+    #         if im is None:
+    #             raise FileNotFoundError(f"Image Not Found {f}")
+
+    #         h0, w0 = im.shape[:2]  # orig hw
+    #         if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
+    #             r = self.imgsz / max(h0, w0)  # ratio
+    #             if r != 1:  # if sizes are not equal
+    #                 w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
+    #                 im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+    #         elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
+    #             im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+    #         if im.ndim == 2:
+    #             im = im[..., None]
+
+    #         # Add to buffer if training with augmentations
+    #         if self.augment:
+    #             self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+    #             self.buffer.append(i)
+    #             if 1 < len(self.buffer) >= self.max_buffer_length:  # prevent empty buffer
+    #                 j = self.buffer.pop(0)
+    #                 if self.cache != "ram":
+    #                     self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
+
+    #         return im, (h0, w0), im.shape[:2]
+
+    #     return self.ims[i], self.im_hw0[i], self.im_hw[i]
+
+    # def cache_images(self) -> None:
+    #     """Cache images to memory or disk for faster training."""
+    #     b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
+    #     fcn, storage = (self.cache_images_to_disk, "Disk") if self.cache == "disk" else (self.load_image, "RAM")
+    #     with ThreadPool(NUM_THREADS) as pool:
+    #         results = pool.imap(fcn, range(self.ni))
+    #         pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
+    #         for i, x in pbar:
+    #             if self.cache == "disk":
+    #                 b += self.npy_files[i].stat().st_size
+    #             else:  # 'ram'
+    #                 self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+    #                 b += self.ims[i].nbytes
+    #             pbar.desc = f"{self.prefix}Caching images ({b / gb:.1f}GB {storage})"
+    #         pbar.close()
+    def load_image(self, i):
+        """Loads 1 image from dataset index 'i', returns (im, original hw, resized hw)."""
         im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
         if im is None:  # not cached in RAM
             if fn.exists():  # load npy
-                try:
-                    im = np.load(fn)
-                except Exception as e:
-                    LOGGER.warning(f"{self.prefix}Removing corrupt *.npy image file {fn} due to: {e}")
-                    Path(fn).unlink(missing_ok=True)
-                    im = imread(f, flags=self.cv2_flag)  # BGR
+                im = np.load(fn)
             else:  # read image
-                im = imread(f, flags=self.cv2_flag)  # BGR
-            if im is None:
-                raise FileNotFoundError(f"Image Not Found {f}")
+                im = cv2.imread(f)  # BGR
+                if im is None:
+                    raise FileNotFoundError(f"Image Not Found {f}")
 
+            # === [Auto-Fix] Force 6-Channel Input (RGB + 3xDepth) ===
+            try:
+                # 1. Infer depth path
+                depth_path = f.replace('/images/', '/depths/').rsplit('.', 1)[0] + '.png'
+                
+                # 2. Read depth (16-bit or 8-bit)
+                depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                
+                if depth is not None:
+                    # Resize
+                    if depth.shape[:2] != im.shape[:2]:
+                        depth = cv2.resize(depth, (im.shape[1], im.shape[0]))
+                    
+                    # Normalize to 0-255
+                    if depth.dtype == 'uint16':
+                        depth = (depth / depth.max() * 255.0).astype('uint8')
+                    elif depth.dtype != 'uint8':
+                        depth = depth.astype('uint8')
+                    
+                    # Expand to (H,W,1)
+                    if len(depth.shape) == 2:
+                        depth = np.expand_dims(depth, axis=2)
+                        
+                    # CRITICAL: Repeat to 3 channels to match RGB backbone weights
+                    depth_3ch = np.repeat(depth, 3, axis=2)
+                    
+                    # Concat: RGB(3) + Depth(3) = 6 Channels
+                    im = np.concatenate((im, depth_3ch), axis=2)
+                else:
+                    # Fallback: Zero padding if no depth
+                    print(f"Warning: No depth found for {f}")
+                    im = np.concatenate((im, np.zeros_like(im)), axis=2)
+                    
+            except Exception as e:
+                print(f"Depth load error: {e}")
+            # ========================================================
+            
+            # === 核心修改：加载深度图并构建 6 通道输入 ===
+            try:
+                # 1. 构造深度图路径 (假设 images/ 和 depths/ 同级)
+                # 示例: /data/images/train/01.jpg -> /data/depths/train/01.png
+                depth_path = f.replace('/images/', '/depths/').rsplit('.', 1)[0] + '.png'
+                
+                # 2. 读取深度图 (必须用 UNCHANGED 读取原始16位数据)
+                depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                
+                if depth is not None:
+                    # 3. 尺寸对齐
+                    if depth.shape[:2] != im.shape[:2]:
+                        depth = cv2.resize(depth, (im.shape[1], im.shape[0]))
+                    
+                    # 4. 归一化 (0-65535 -> 0-255) 并转为 uint8
+                    # 提示：如果不归一化，模型无法收敛
+                    if depth.dtype == 'uint16':
+                        depth = (depth / depth.max() * 255.0).astype('uint8')
+                    
+                    # 5. 维度扩展与复制 (H, W) -> (H, W, 1) -> (H, W, 3)
+                    # 这是 3+3 策略的精髓：让深度图伪装成 RGB
+                    if len(depth.shape) == 2:
+                        depth = np.expand_dims(depth, axis=2)
+                    depth_3ch = np.repeat(depth, 3, axis=2) 
+                    
+                    # 6. 拼接: RGB(3) + Depth(3) -> Total(6)
+                    im = np.concatenate((im, depth_3ch), axis=2)
+                else:
+                    # 没找到深度图时的保底策略：拼个全黑的
+                    print(f"Warning: No depth for {f}, using zeros.")
+                    zeros = np.zeros_like(im)
+                    im = np.concatenate((im, zeros), axis=2)
+
+            except Exception as e:
+                print(f"Depth load error {f}: {e}")
+            # ==========================================
             h0, w0 = im.shape[:2]  # orig hw
-            if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
-                r = self.imgsz / max(h0, w0)  # ratio
-                if r != 1:  # if sizes are not equal
-                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
-                    im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
-            elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
-                im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
-            if im.ndim == 2:
-                im = im[..., None]
-
-            # Add to buffer if training with augmentations
-            if self.augment:
-                self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
-                self.buffer.append(i)
-                if 1 < len(self.buffer) >= self.max_buffer_length:  # prevent empty buffer
-                    j = self.buffer.pop(0)
-                    if self.cache != "ram":
-                        self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
-
+            r = self.imgsz / max(h0, w0)  # ratio
+            if r != 1:  # if sizes are not equal
+                interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
+                im = cv2.resize(im, (int(w0 * r), int(h0 * r)), interpolation=interp)
             return im, (h0, w0), im.shape[:2]
-
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
-
-    def cache_images(self) -> None:
-        """Cache images to memory or disk for faster training."""
-        b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
-        fcn, storage = (self.cache_images_to_disk, "Disk") if self.cache == "disk" else (self.load_image, "RAM")
-        with ThreadPool(NUM_THREADS) as pool:
-            results = pool.imap(fcn, range(self.ni))
-            pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
-            for i, x in pbar:
-                if self.cache == "disk":
-                    b += self.npy_files[i].stat().st_size
-                else:  # 'ram'
-                    self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
-                    b += self.ims[i].nbytes
-                pbar.desc = f"{self.prefix}Caching images ({b / gb:.1f}GB {storage})"
-            pbar.close()
-
+    
     def cache_images_to_disk(self, i: int) -> None:
         """Save an image as an *.npy file for faster loading."""
         f = self.npy_files[i]

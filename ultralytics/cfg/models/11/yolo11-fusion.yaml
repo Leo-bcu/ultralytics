@@ -1,0 +1,103 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# Ultralytics YOLO11 object detection model with P3/8 - P5/32 outputs
+# Model docs: https://docs.ultralytics.com/models/yolo11
+# Task docs: https://docs.ultralytics.com/tasks/detect
+
+# Parameters
+nc: 80 # number of classes
+scales: # model compound scaling constants, i.e. 'model=yolo11n.yaml' will call yolo11.yaml with scale 'n'
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024] # summary: 181 layers, 2624080 parameters, 2624064 gradients, 6.6 GFLOPs
+  s: [0.50, 0.50, 1024] # summary: 181 layers, 9458752 parameters, 9458736 gradients, 21.7 GFLOPs
+  m: [0.50, 1.00, 512] # summary: 231 layers, 20114688 parameters, 20114672 gradients, 68.5 GFLOPs
+  l: [1.00, 1.00, 512] # summary: 357 layers, 25372160 parameters, 25372144 gradients, 87.6 GFLOPs
+  x: [1.00, 1.50, 512] # summary: 357 layers, 56966176 parameters, 56966160 gradients, 196.0 GFLOPs
+
+# backbone:
+#   # [from, repeats, module, args]
+  
+#   # === 0. 输入切分 ===
+#   # 输入 Batch x 6 x 640 x 640
+#   # SplitInput 将其分为 [RGB(3), Depth(3)]
+#   [[-1, 1, SplitInput, []],]  # Layer 0 outputs: [x_rgb, x_depth]
+
+#   # === Branch 1: RGB Backbone (Standard YOLO11) ===
+#   # 处理 Layer 0 的第 0 个输出
+#   [ [0], 1, PassThrough, [0]],  # 1. Select RGB
+#   [-1, 1, Conv, [64, 3, 2]],    # 2-P1/2
+#   [-1, 1, Conv, [128, 3, 2]],   # 3-P2/4
+#   [-1, 2, C3k2, [256, False, 0.25]], # 4-P3/8 (RGB Feature)
+
+#   # === Branch 2: Depth Backbone (Same Structure) ===
+#   # 处理 Layer 0 的第 1 个输出
+#   # 因为输入是 3 通道，这里完全复用预训练权重！
+#   [ [0], 1, PassThrough, [1]],  # 5. Select Depth
+#   [-1, 1, Conv, [64, 3, 2]],    # 6-P1/2
+#   [-1, 1, Conv, [128, 3, 2]],   # 7-P2/4
+#   [-1, 2, C3k2, [256, False, 0.25]], # 8-P3/8 (Depth Feature)
+
+#   # === Fusion: P3 Level ===
+#   # 将 RGB(4) 和 Depth(8) 融合
+#   [[4, 8], 1, CGAFusion, []],   # 9. P3 Fused Feature
+
+#   # ... 你需要继续补全 P4, P5 的主干和融合 ...
+#   # 为了让你先跑通，我这里先只写到 P3 的融合作为演示
+#   # 实际使用时，请参考 yolo11.yaml 把剩下的层补全
+#   # 注意：融合后的层号会变化，Head 部分的 from 列表要对应修改
+# ] 
+# head:
+#   # ... 复制 yolo11.yaml 的 head ...
+#   # 记得修改 from 的来源层号指向融合后的层
+backbone:
+  # [from, repeats, module, args]
+  
+  # === 0. Input Split: Batch x 6 -> [Batch x 3, Batch x 3] ===
+  - [-1, 1, SplitInput, []]  # 0
+
+  # ==========================================
+  # Branch 1: RGB Stream (Standard YOLO11)
+  # ==========================================
+  - [0, 1, SelectItem, [0]] # 1 (Select RGB)
+  - [-1, 1, Conv, [64, 3, 2]]  # 2-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 3-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]] # 4-P3/8 (RGB Feature)
+  - [-1, 1, Conv, [256, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, False, 0.25]] # 6-P4/16 (RGB Feature)
+  - [-1, 1, Conv, [512, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [512, True]] # 8-P5/32 (RGB Feature)
+  - [-1, 1, SPPF, [512, 5]]    # 9
+  - [-1, 1, C2PSA, [512]]      # 10 (Final RGB P5)
+
+  # ==========================================
+  # Branch 2: Depth Stream (Identical Structure)
+  # ==========================================
+  - [0, 1, SelectItem, [1]] # 11 (Select Depth)
+  - [-1, 1, Conv, [64, 3, 2]]  # 12-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 13-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]] # 14-P3/8 (Depth Feature)
+  - [-1, 1, Conv, [256, 3, 2]] # 15-P4/16
+  - [-1, 2, C3k2, [512, False, 0.25]] # 16-P4/16 (Depth Feature)
+  - [-1, 1, Conv, [512, 3, 2]] # 17-P5/32
+  - [-1, 2, C3k2, [512, True]] # 18-P5/32 (Depth Feature)
+  - [-1, 1, SPPF, [512, 5]]    # 19
+  - [-1, 1, C2PSA, [512]]      # 20 (Final Depth P5)
+
+  # ==========================================
+  # Fusion Stage (CGAFusion)
+  # ==========================================
+  # Fuse P3: RGB(4) + Depth(14)
+  - [[4, 14], 1, CGAFusion, []] # 21 -> Fused P3
+
+  # Fuse P4: RGB(6) + Depth(16)
+  - [[6, 16], 1, CGAFusion, []] # 22 -> Fused P4
+
+  # Fuse P5: RGB(10) + Depth(20)
+  - [[10, 20], 1, CGAFusion, []] # 23 -> Fused P5
+
+head:
+  # ==========================================
+  # Detection Head
+  # ==========================================
+  # Inputs: [Fused P3, Fused P4, Fused P5]
+  - [[21, 22, 23], 1, Detect, [nc]] # Detect(P3, P4, P5)
